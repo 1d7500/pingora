@@ -57,6 +57,7 @@
 //! For a carefully crafted real-world example, see the [`pingora-load-balancing`](https://docs.rs/pingora-load-balancing)
 //! crate.
 
+// 导入所需的标准库模块。
 use std::cmp::Ordering;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -64,44 +65,43 @@ use std::usize;
 
 use crc32fast::Hasher;
 
-/// A [Bucket] represents a server for consistent hashing
+/// 表示用于一致性哈希的服务器的结构。
 ///
-/// A [Bucket] contains a [SocketAddr] to the server and a weight associated with it.
+/// 包含一个到服务器的Socket地址以及与之相关的权重。
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd)]
 pub struct Bucket {
-    // The node name.
-    // TODO: UDS
+    // 节点名称，使用Socket地址表示。
     node: SocketAddr,
 
-    // The weight associated with a node. A higher weight indicates that this node should
-    // receive more requests.
+    // 与节点相关联的权重。更高的权重意味着该节点应接收更多请求。
     weight: u32,
 }
 
 impl Bucket {
-    /// Return a new bucket with the given node and weight.
+    /// 创建一个具有给定节点和权重的新桶。
     ///
-    /// The chance that a [Bucket] is selected is proportional to the relative weight of all [Bucket]s.
+    /// # 参数
+    /// * `node` - 桶的节点地址。
+    /// * `weight` - 桶的权重。
     ///
     /// # Panics
-    ///
-    /// This will panic if the weight is zero.
+    /// 如果权重为零，则触发恐慌，因为权重必须至少为1。
     pub fn new(node: SocketAddr, weight: u32) -> Self {
         assert!(weight != 0, "weight must be at least one");
-
         Bucket { node, weight }
     }
 }
 
-// A point on the continuum.
+/// 表示一致性哈希环上的点的结构。
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Point {
-    // the index to the actual address
+    // 实际地址的索引。
     node: u32,
+    // 哈希值。
     hash: u32,
 }
 
-// We only want to compare the hash when sorting, so we implement these traits by hand.
+// 实现点的排序，只比较哈希值。
 impl Ord for Point {
     fn cmp(&self, other: &Self) -> Ordering {
         self.hash.cmp(&other.hash)
@@ -115,26 +115,33 @@ impl PartialOrd for Point {
 }
 
 impl Point {
+    /// 创建一个新的点。
+    ///
+    /// # 参数
+    /// * `node` - 点关联的节点索引。
+    /// * `hash` - 点的哈希值。
     fn new(node: u32, hash: u32) -> Self {
         Point { node, hash }
     }
 }
 
-/// The consistent hashing ring
+/// 一致性哈希环的结构。
 ///
-/// A [Continuum] represents a ring of buckets where a node is associated with various points on
-/// the ring.
+/// 表示一系列桶的哈希环，每个节点在环上关联多个点。
 pub struct Continuum {
+    // 哈希环，存储点。
     ring: Box<[Point]>,
+    // 地址数组，与节点索引对应。
     addrs: Box<[SocketAddr]>,
 }
 
 impl Continuum {
-    /// Create a new [Continuum] with the given list of buckets.
+    /// 使用给定的桶列表创建一个新的哈希环。
+    ///
+    /// # 参数
+    /// * `buckets` - 桶的列表。
     pub fn new(buckets: &[Bucket]) -> Self {
-        // This constant is copied from nginx. It will create 160 points per weight unit. For
-        // example, a weight of 2 will create 320 points on the ring.
-        const POINT_MULTIPLE: u32 = 160;
+        const POINT_MULTIPLE: u32 = 160; // 每个权重单位对应的点数。
 
         if buckets.is_empty() {
             return Continuum {
@@ -143,35 +150,21 @@ impl Continuum {
             };
         }
 
-        // The total weight is multiplied by the factor of points to create many points per node.
         let total_weight: u32 = buckets.iter().fold(0, |sum, b| sum + b.weight);
         let mut ring = Vec::with_capacity((total_weight * POINT_MULTIPLE) as usize);
         let mut addrs = Vec::with_capacity(buckets.len());
 
         for bucket in buckets {
             let mut hasher = Hasher::new();
-
-            // We only do the following for backwards compatibility with nginx/memcache:
-            // - Convert SocketAddr to string
-            // - The hash input is as follows "HOST EMPTY PORT PREVIOUS_HASH". Spaces are only added
-            //   for readability.
-            // TODO: remove this logic and hash the literal SocketAddr once we no longer
-            // need backwards compatibility
-
-            // with_capacity = max_len(ipv6)(39) + len(null)(1) + max_len(port)(5)
-            let mut hash_bytes = Vec::with_capacity(39 + 1 + 5);
-            write!(&mut hash_bytes, "{}", bucket.node.ip()).unwrap();
-            write!(&mut hash_bytes, "\0").unwrap();
-            write!(&mut hash_bytes, "{}", bucket.node.port()).unwrap();
+            let mut hash_bytes = Vec::with_capacity(45);
+            write!(&mut hash_bytes, "{}\0{}", bucket.node.ip(), bucket.node.port()).unwrap();
             hasher.update(hash_bytes.as_ref());
 
-            // A higher weight will add more points for this node.
             let num_points = bucket.weight * POINT_MULTIPLE;
-
-            // This is appended to the crc32 hash for each point.
             let mut prev_hash: u32 = 0;
             addrs.push(bucket.node);
             let node = addrs.len() - 1;
+
             for _ in 0..num_points {
                 let mut hasher = hasher.clone();
                 hasher.update(&prev_hash.to_le_bytes());
@@ -182,7 +175,6 @@ impl Continuum {
             }
         }
 
-        // Sort and remove any duplicates.
         ring.sort_unstable();
         ring.dedup_by(|a, b| a.hash == b.hash);
 
@@ -192,54 +184,56 @@ impl Continuum {
         }
     }
 
-    /// Find the associated index for the given input.
+    /// 根据给定的输入找到关联的索引。
+    ///
+    /// # 参数
+    /// * `input` - 输入数据用于计算哈希值。
     pub fn node_idx(&self, input: &[u8]) -> usize {
         let hash = crc32fast::hash(input);
 
-        // The `Result` returned here is either a match or the error variant returns where the
-        // value would be inserted.
         match self.ring.binary_search_by(|p| p.hash.cmp(&hash)) {
             Ok(i) => i,
-            Err(i) => {
-                // We wrap around to the front if this value would be inserted at the end.
-                if i == self.ring.len() {
-                    0
-                } else {
-                    i
-                }
-            }
+            Err(i) => if i == self.ring.len() { 0 } else { i },
         }
     }
 
-    /// Hash the given `hash_key` to the server address.
+    /// 根据给定的哈希键返回服务器地址。
+    ///
+    /// # 参数
+    /// * `hash_key` - 用于计算哈希值的键。
     pub fn node(&self, hash_key: &[u8]) -> Option<SocketAddr> {
         self.ring
-            .get(self.node_idx(hash_key)) // should we unwrap here?
+            .get(self.node_idx(hash_key))
             .map(|p| self.addrs[p.node as usize])
     }
 
-    /// Get an iterator of nodes starting at the original hashed node of the `hash_key`.
+    /// 获取从原始哈希节点开始的节点迭代器。
     ///
-    /// This function is useful to find failover servers if the original ones are offline, which is
-    /// cheaper than rebuilding the entire hash ring.
+    /// # 参数
+    /// * `hash_key` - 用于计算哈希值的键。
+    ///
+    /// 这个函数用于查找原始服务器离线时的备用服务器，比重建整个哈希环要廉价。
     pub fn node_iter(&self, hash_key: &[u8]) -> NodeIterator {
         NodeIterator {
-            idx: self.node_idx(hash_key),
+            idx: self.node_idx(hash_key), // 就近基于hash_key 获取idx
             continuum: self,
         }
     }
 
+    /// 获取地址的方法，可以循环访问。
+    ///
+    /// # 参数
+    /// * `idx` - 索引引用，用于迭代。
     pub fn get_addr(&self, idx: &mut usize) -> Option<&SocketAddr> {
         let point = self.ring.get(*idx);
         if point.is_some() {
-            // only update idx for non-empty ring otherwise we will panic on modulo 0
             *idx = (*idx + 1) % self.ring.len();
         }
         point.map(|p| &self.addrs[p.node as usize])
     }
 }
 
-/// Iterator over a Continuum
+/// 哈希环上的节点迭代器。
 pub struct NodeIterator<'a> {
     idx: usize,
     continuum: &'a Continuum,
@@ -252,6 +246,7 @@ impl<'a> Iterator for NodeIterator<'a> {
         self.continuum.get_addr(&mut self.idx)
     }
 }
+
 
 #[cfg(test)]
 mod tests {

@@ -114,13 +114,17 @@ impl<SV> HttpProxy<SV> {
         // phase 1 read request header
 
         let res = tokio::select! {
-            biased; // biased select is cheaper, and we don't want to drop already buffered requests
+            biased; // 声明这是一个偏向选择，提高某个分支的优先级
             res = downstream_session.read_request() => { res }
+            // 尝试从 downstream_session 读取请求。如果这个操作先完成，将返回结果并赋值给 res
+
             _ = self.shutdown.notified() => {
-                // service shutting down, dropping the connection to stop more req from coming in
+                // 监听一个 shutdown 信号。如果收到 shutdown 通知，执行大括号中的代码
                 return None;
+                // 服务正在关闭，终止连接以停止接收更多请求，返回 None 结束当前函数
             }
         };
+
         match res {
             Ok(true) => {
                 // TODO: check n==0

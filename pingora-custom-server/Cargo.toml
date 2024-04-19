@@ -1,0 +1,36 @@
+[package]
+name = "pingora-custom-server"
+version = "0.1.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+arc-swap = "1"
+pingora = { version = "0.1.1", path = "../pingora", default-features = true, features = [
+    "lb",
+    "proxy",
+] }
+structopt = "0.3"
+tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+matches = "0.1"
+env_logger = "0.9"
+reqwest = { version = "0.11", features = ["rustls"], default-features = false }
+hyperlocal = "0.8"
+hyper = "0.14"
+jemallocator = "0.5"
+async-trait = { workspace = true }
+http = { workspace = true }
+log = { workspace = true }
+prometheus = "0.13"
+once_cell = { workspace = true }
+bytes = { workspace = true }
+regex = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.8"
+
+[[bin]]
+name = "myproxy"
+path = "src/main.rs"

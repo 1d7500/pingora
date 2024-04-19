@@ -116,33 +116,41 @@ impl RequestHeader {
     /// A [RequestHeader] created from this type is more space efficient than those from [Self::build()].
     ///
     /// Use this method if reading from or writing to HTTP/2 sessions where header case doesn't matter anyway.
+    // 定义一个公共函数 `build_no_case`，它接受三个参数并返回 `Result<Self>` 类型。
     pub fn build_no_case(
-        method: impl TryInto<Method>,
-        path: &[u8],
-        size_hint: Option<usize>,
+        method: impl TryInto<Method>, // 接受一个泛型参数 `method`，该参数必须实现 `TryInto<Method>` 特性。
+        path: &[u8],                  // `path` 参数是一个字节切片的引用，代表请求的路径。
+        size_hint: Option<usize>,     // `size_hint` 是一个可选的 `usize` 类型，提供容器的大小提示。
     ) -> Result<Self> {
+        // 创建一个新的请求对象 `req`，利用 `new_no_case` 函数，该函数可能根据 `size_hint` 来优化存储。
         let mut req = Self::new_no_case(size_hint);
+
+        // 尝试将 `method` 转换为 `Method` 类型。如果转换失败，返回一个错误。
         req.base.method = method
             .try_into()
             .explain_err(InvalidHTTPHeader, |_| "invalid method")?;
+
+        // 尝试将 `path` 字节切片转换为 UTF-8 字符串。
         if let Ok(p) = std::str::from_utf8(path) {
+            // 如果转换成功，构建一个 URI。
             let uri = Uri::builder()
-                .path_and_query(p)
-                .build()
-                .explain_err(InvalidHTTPHeader, |_| format!("invalid uri {}", p))?;
-            req.base.uri = uri;
-            // keep raw_path empty, no need to store twice
+                .path_and_query(p) // 使用转换后的路径和查询字符串 `p` 构建 URI。
+                .build() // 构建 URI。
+                .explain_err(InvalidHTTPHeader, |_| format!("invalid uri {}", p))?; // 如果构建失败，返回一个错误。
+            req.base.uri = uri; // 将成功构建的 URI 设置到请求的 `base` 结构中。
+                                // 保持 `raw_path` 为空，因为无需重复存储。
         } else {
-            // put a valid utf-8 path into base for read only access
+            // 如果 `path` 不能被转换为有效的 UTF-8 字符串，使用 `from_utf8_lossy` 方法进行容错转换。
             let lossy_str = String::from_utf8_lossy(path);
             let uri = Uri::builder()
-                .path_and_query(lossy_str.as_ref())
-                .build()
-                .explain_err(InvalidHTTPHeader, |_| format!("invalid uri {}", lossy_str))?;
-            req.base.uri = uri;
-            req.raw_path_fallback = path.to_vec();
+                .path_and_query(lossy_str.as_ref()) // 使用容错转换后的路径和查询字符串构建 URI。
+                .build() // 构建 URI。
+                .explain_err(InvalidHTTPHeader, |_| format!("invalid uri {}", lossy_str))?; // 如果构建失败，返回一个错误。
+            req.base.uri = uri; // 将成功构建的 URI 设置到请求的 `base` 结构中。
+            req.raw_path_fallback = path.to_vec(); // 将原始的 `path` 字节切片存储在 `raw_path_fallback` 中，以便只读访问。
         }
 
+        // 成功构建请求后，返回包含请求对象的 `Ok` 结果。
         Ok(req)
     }
 
@@ -553,30 +561,50 @@ where
     value_map.remove(name)
 }
 
+// 使用 `#[inline]` 属性提示编译器在可能时内联此函数，以优化运行时性能。
 #[inline]
-fn header_to_h1_wire(key_map: Option<&CaseMap>, value_map: &HMap, buf: &mut impl BufMut) {
-    const CRLF: &[u8; 2] = b"\r\n";
+fn header_to_h1_wire(
+    key_map: Option<&CaseMap>, // 可选的 `CaseMap` 引用，用于映射头部字段名到其规范形式。
+    value_map: &HMap,          // `HMap` 引用，存储头部字段及其值。
+    buf: &mut impl BufMut,     // 输出缓冲区，实现 `BufMut` 特性，用于写入格式化的头部数据。
+) {
+    // 定义 HTTP 头部键值对之间的分隔符。
     const HEADER_KV_DELIMITER: &[u8; 2] = b": ";
+    // 定义头部行的结束符号。
+    const CRLF: &[u8; 2] = b"\r\n";
 
+    // 检查是否提供了 `key_map`。
     if let Some(key_map) = key_map {
+        // 如果存在 `key_map`，则获取键的迭代器并与值的迭代器进行配对。
         let iter = key_map.iter().zip(value_map.iter());
         for ((header, case_header), (header2, val)) in iter {
+            // 确保迭代器中的键（来自两个不同的源）是相匹配的。
             if header != header2 {
-                // in case the header iteration order changes in future versions of HMap
+                // 如果头部名称不匹配，则抛出异常，因为这可能意味着 `HMap` 实现的迭代顺序有变化。
                 panic!("header iter mismatch {}, {}", header, header2)
             }
+            // 将规范形式的头部名称写入缓冲区。
             buf.put_slice(case_header.as_slice());
+            // 添加键值分隔符。
             buf.put_slice(HEADER_KV_DELIMITER);
+            // 将头部值写入缓冲区。
             buf.put_slice(val.as_ref());
+            // 添加行结束符号。
             buf.put_slice(CRLF);
         }
     } else {
+        // 如果没有提供 `key_map`，则直接从 `value_map` 迭代。
         for (header, value) in value_map {
+            // 尝试获取头部名称的标题化（首字母大写）形式。
             let titled_header =
                 case_header_name::titled_header_name_str(header).unwrap_or(header.as_str());
+            // 将标题化的头部名称写入缓冲区。
             buf.put_slice(titled_header.as_bytes());
+            // 添加键值分隔符。
             buf.put_slice(HEADER_KV_DELIMITER);
+            // 将头部值写入缓冲区。
             buf.put_slice(value.as_ref());
+            // 添加行结束符号。
             buf.put_slice(CRLF);
         }
     }
