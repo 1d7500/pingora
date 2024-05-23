@@ -1,6 +1,7 @@
 use pingora::lb::Backend;
 use pingora::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(in crate::discovery::eureka) struct Application {
@@ -34,6 +35,7 @@ pub(in crate::discovery::eureka) struct Instance {
     port: Option<Port>,
     securePort: Option<Port>,
     status: String,
+    metadata: HashMap<String, String>,
 }
 
 impl Instance {
@@ -44,6 +46,12 @@ impl Instance {
             self.ipAddr.to_owned()
         };
 
-        Backend::new(&url_prefix)
+        let primary_node = self
+            .metadata
+            .get("primaryNode")
+            .map_or(false, |r| r.parse::<bool>().ok().unwrap());
+        // use log::info;
+        // info!("metadata: {:?} primary_node: {}", self.metadata, primary_node);
+        Backend::new(&url_prefix, primary_node)
     }
 }

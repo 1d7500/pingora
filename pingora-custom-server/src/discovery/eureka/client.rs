@@ -1,4 +1,4 @@
-use crate::discovery::eureka::domain::{Application, Applications};
+use crate::discovery::eureka::domain::Applications;
 use pingora::lb::Backend;
 use std::error::Error;
 
@@ -20,6 +20,7 @@ impl EurekaStub {
     pub(in crate::discovery::eureka) async fn query(
         &self,
         application_name: &str,
+        primary: bool,
     ) -> Result<Vec<Backend>, Box<dyn Error>> {
         let url = format!("{}/eureka/apps/{}", &self.url_prefix, application_name);
 
@@ -34,12 +35,20 @@ impl EurekaStub {
         let body = response.text().await?;
         let response = serde_json::from_str::<Applications>(&body)?;
 
-        let backends = response
+        let mut backends = response
             .application
             .instance
             .iter()
-            .filter_map(|instance| instance.create_backend().ok())
-            .collect();
+            .filter_map(|instance| instance.create_backend().ok());
+
+        let backends = if primary {
+            backends.filter(|backend| backend.primary == true).collect()
+        } else {
+            backends.collect()
+        };
+
+        // use log::info;
+        // info!("primary: {} backends: {:?}", primary, backends);
 
         Ok(backends)
     }

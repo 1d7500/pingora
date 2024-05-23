@@ -1,3 +1,5 @@
+#![feature(btree_cursors)]
+#![feature(let_chains)]
 extern crate pingora;
 
 mod app;

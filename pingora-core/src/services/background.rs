@@ -79,6 +79,10 @@ where
 }
 
 // Helper function to create a background service with a human readable name
-pub fn background_service<SV>(name: &str, task: SV) -> GenBackgroundService<SV> {
-    GenBackgroundService::new(format!("BG {name}"), Arc::new(task))
+// pub fn background_service<SV>(name: &str, task: SV) -> GenBackgroundService<SV> {
+//     background_service0(name, Arc::new(task))
+// }
+
+pub fn background_service<SV>(name: &str, task: Arc<SV>) -> GenBackgroundService<SV> {
+    GenBackgroundService::new(format!("BG {name}"), task.clone())
 }

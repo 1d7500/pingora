@@ -62,6 +62,7 @@ impl Static {
             let addrs = addrs.to_socket_addrs()?.map(|addr| Backend {
                 addr: SocketAddr::Inet(addr),
                 weight: 1,
+                primary: true
             });
             upstreams.extend(addrs);
         }

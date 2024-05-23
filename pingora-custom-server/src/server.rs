@@ -48,9 +48,9 @@ impl BackgroundService for ExampleBackgroundService {
         }
     }
 }
-
 use pingora::tls::pkey::{PKey, Private};
 use pingora::tls::x509::X509;
+use std::sync::Arc;
 struct DynamicCert {
     cert: X509,
     key: PKey<Private>,
@@ -150,7 +150,7 @@ pub fn startup() {
     let mut prometheus_service_http = ListeningService::prometheus_http_service();
     prometheus_service_http.add_tcp("127.0.0.1:6150");
 
-    let background_service = background_service("example", ExampleBackgroundService {});
+    let background_service = background_service("example", Arc::new(ExampleBackgroundService {}));
 
     let services: Vec<Box<dyn Service>> = vec![
         Box::new(echo_service),

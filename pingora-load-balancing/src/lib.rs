@@ -52,18 +52,21 @@ pub struct Backend {
     /// The relative weight of the server. Load balancing algorithms will
     /// proportionally distributed traffic according to this value.
     pub weight: usize,
+    pub primary: bool,
 }
 
 impl Backend {
     /// Create a new [Backend] with `weight` 1. The function will try to parse
     ///  `addr` into a [std::net::SocketAddr].
-    pub fn new(addr: &str) -> Result<Self> {
+    pub fn new(addr: &str, primary: bool) -> Result<Self> {
         let addr = addr
             .parse()
             .or_err(ErrorType::InternalError, "invalid socket addr")?;
+        
         Ok(Backend {
             addr: SocketAddr::Inet(addr),
             weight: 1,
+            primary: primary
         })
         // TODO: UDS
     }
@@ -354,6 +357,7 @@ where
     {
         let selection = self.selector.load();
         let mut iter = UniqueIterator::new(selection.iter(key), max_iterations);
+        
         while let Some(b) = iter.get_next() {
             if accept(&b, self.backends.ready(&b)) {
                 return Some(b);

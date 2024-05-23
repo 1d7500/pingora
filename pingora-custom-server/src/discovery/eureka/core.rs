@@ -20,20 +20,17 @@ pub struct EurekaServiceDiscovery {
     address: Arc<String>,
     backends_cache: Arc<ArcSwap<BTreeSet<Backend>>>,
     stub: EurekaStub,
+    primary: bool,
 }
 
 unsafe impl Send for EurekaServiceDiscovery {}
 
 impl EurekaServiceDiscovery {
-    pub fn create_and_query(address: &str, service_id: &str) -> Self {
+    pub fn create(address: &str, service_id: &str, primary: bool) -> Self {
         let address = Arc::new(address.to_owned());
         let service_id = Arc::new(service_id.to_owned());
         let url_prefix = address.clone().to_owned();
         let stub = EurekaStub::new(&url_prefix);
-
-        // let backends = Runtime::new()
-        //     .unwrap()
-        //     .block_on(async { &self.get_instances(&stub, &service_id).await });
 
         let backends_cache = Arc::new(ArcSwap::new(Arc::new(BTreeSet::new())));
 
@@ -42,6 +39,7 @@ impl EurekaServiceDiscovery {
             address: address.clone(),
             backends_cache: backends_cache.clone(),
             stub: stub,
+            primary: primary,
         };
 
         instance
@@ -50,14 +48,15 @@ impl EurekaServiceDiscovery {
     async fn get_instances(&self) -> Result<BTreeSet<Backend>, Box<dyn Error>> {
         let instances = self
             .stub
-            .query(&self.service_id)
+            .query(&self.service_id, self.primary)
             .await?
             .into_iter()
             .collect::<BTreeSet<Backend>>();
 
         info!(
-            "service_id: {} instances: {:?}",
-            &self.service_id, instances
+            "service_id: {} instances: {}",
+            &self.service_id,
+            instances.len()
         );
 
         Ok(instances)

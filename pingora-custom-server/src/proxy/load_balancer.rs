@@ -16,8 +16,12 @@ use async_trait::async_trait;
 use log::info;
 use pingora::services::background::background_service;
 use pingora::services::Service;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use structopt::StructOpt;
+
+use crate::discovery;
+use crate::proxy::gateway::{Router, StickyConfig};
 
 use pingora::lb::{selection::RoundRobin, LoadBalancer};
 use pingora::proxy::{ProxyHttp, Session};
@@ -25,46 +29,47 @@ use pingora::server::configuration::Opt;
 use pingora::server::Server;
 use pingora::upstreams::peer::HttpPeer;
 use pingora::Result;
+
 use tokio::sync::watch;
 
-pub struct LB(Arc<LoadBalancer<RoundRobin>>);
+// pub struct LB(Arc<LoadBalancer<RoundRobin>>);
 
-#[async_trait]
-impl ProxyHttp for LB {
-    type CTX = ();
-    fn new_ctx(&self) -> Self::CTX {}
+// #[async_trait]
+// impl ProxyHttp for LB {
+//     type CTX = ();
+//     fn new_ctx(&self) -> Self::CTX {}
 
-    async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut ()) -> Result<Box<HttpPeer>> {
-        let upstream = self
-            .0
-            .select(b"", 256) // hash doesn't matter
-            .unwrap();
+//     async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut ()) -> Result<Box<HttpPeer>> {
+//         let upstream = self
+//             .0
+//             .select(b"", 256) // hash doesn't matter
+//             .unwrap();
 
-        info!("upstream peer is: {:?}", upstream);
+//         info!("upstream peer is: {:?}", upstream);
 
-        let peer = Box::new(HttpPeer::new(
-            upstream,
-            false,
-            "one.one.one.one".to_string(),
-        ));
-        Ok(peer)
-    }
+//         let peer = Box::new(HttpPeer::new(
+//             upstream,
+//             false,
+//             "one.one.one.one".to_string(),
+//         ));
+//         Ok(peer)
+//     }
 
-    async fn upstream_request_filter(
-        &self,
-        _session: &mut Session,
-        upstream_request: &mut pingora::http::RequestHeader,
-        _ctx: &mut Self::CTX,
-    ) -> Result<()> {
-        upstream_request
-            .insert_header("Host", "one.one.one.one")
-            .unwrap();
-        Ok(())
-    }
-}
+//     async fn upstream_request_filter(
+//         &self,
+//         _session: &mut Session,
+//         upstream_request: &mut pingora::http::RequestHeader,
+//         _ctx: &mut Self::CTX,
+//     ) -> Result<()> {
+//         upstream_request
+//             .insert_header("Host", "one.one.one.one")
+//             .unwrap();
+//         Ok(())
+//     }
+// }
 
 // RUST_LOG=INFO cargo run --example load_balancer
-pub fn startup() {
+pub fn startup(registry_address: &str, primary_paths: BTreeMap<String, StickyConfig>) {
     //
     // read command line arguments
     let (tx, mut rx): (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
@@ -73,26 +78,32 @@ pub fn startup() {
     let mut my_server = Server::new(Some(opt)).unwrap();
     my_server.bootstrap();
 
-    let upstreams =
-        crate::discovery::create_eureka_lb("http://192.168.50.2:8761", "BASE-SPRING-WEB");
+    let (primary_upstreams, full_upstreams) =
+        crate::discovery::create_eureka_lb(registry_address, "BASE-SPRING-WEB");
 
-    // 127.0.0.1:343" is just a bad server
-    // let mut upstreams = LoadBalancer::from_backends(backends);
+    let router = Router::new(
+        primary_paths,
+        primary_upstreams.clone(),
+        full_upstreams.clone(),
+    );
 
-    // upstreams.set_health_check(health_check::TcpHealthCheck::new());
-    // upstreams.health_check_frequency = Some(Duration::from_secs(1));
+    let background_full = background_service("health check", full_upstreams.clone());
+    let background_primary = background_service("health check", primary_upstreams.clone());
 
-    let background = background_service("health check", upstreams);
-    let upstreams = background.task();
+    let _ = background_full.task();
+    let _ = background_primary.task();
 
-    let mut lb = pingora::proxy::http_proxy_service(&my_server.configuration, LB(upstreams));
+    let mut lb = pingora::proxy::http_proxy_service(&my_server.configuration, router);
     lb.add_tcp("0.0.0.0:6188");
     // lb.add_tls_with_settings("0.0.0.0:6189", None, get_tls_settings());
 
     my_server.add_service(lb);
-    my_server.add_service(background);
+    my_server.add_service(background_full);
+    my_server.add_service(background_primary);
     my_server.run_forever();
 }
+
+// TODO 单独追加方法?
 
 fn get_tls_settings() -> pingora::listeners::TlsSettings {
     let cert_path = format!("{}/tests/keys/server.crt", env!("CARGO_MANIFEST_DIR"));
